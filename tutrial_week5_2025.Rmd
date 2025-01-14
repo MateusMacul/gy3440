@@ -1,0 +1,685 @@
+---
+title: "Week 5 Pratical"
+output:
+  html_document: 
+    number_sections: yes
+    toc: yes
+  word_document: default
+  pdf_document:
+    number_sections: yes
+---
+
+```{r global-options, include=FALSE}
+knitr::opts_chunk$set(results= "hide", warning=FALSE, message=FALSE, tidy.opts=list(width.cutoff=80), cash=TRUE)
+```
+# Background
+
+In this practical, we will visualize a few data sets with R. 
+
+1. Geobr library - we will open and visualize the Brazilian territory data using the library called Geobr. We will also visualize the Amazon region and all areas of indigenous land, conservation units and urban areas of Brazil.  
+
+2. Prodes data - we will open and visualize the deforestation of the Brazillian Amazon from 2000 to 2020. Deforestation of the Amazon or the other ecosystems of Brazil is freely available from the PRODES portal http://terrabrasilis.dpi.inpe.br/en/download-2/
+
+3. Terrabrasilis - we will use Terrabrasilis Analytics API to access the data of the Terrabrasilis portal https://github.com/terrabrasilis/terrabrasilisAnalyticsAPI. TerraBrasilis contains an open-source map server (GeoServer (http://terrabrasilis.dpi.inpe.br/geoserver/web/) for displaying interoperable spatial data.TerraBrasilis also integrates customized mapping API https://github.com/Terrabrasilis/terrabrasilis-api procedures and utilities (https://github.com/Terrabrasilis/terrabrasilis-util) as a simple means of creating interactive maps. We will use Terrabrasilis to calculate the area of deforestation for states, for example, Para or Roraima states.
+
+4. Local case study - we will evaluate the effects of forest fires and droughts from 2016 in a central area of the Amazon called Tapajos National Forest (TNF). First, we will open and visualize the deforestation around this area from different databases (Prodes and MapBiomas). Second, we will visualize the area burned in 2016 and the area of secondary forest still available in the region. Third, we will plot a few maps of precipitation data around this region to investigate the effect of droughts in this region. Fourth, we will overlay all roads of the region inside the land-use map of TNF. Fifth, we will divide the entire region with a few grids of 10 by 10 km (cells). With those cells, we are going to calculate the fraction of burned forest by cells, the number of active fires or hot spots of fires per cell, and the amount of accumulated water deficit. Sixth, with all these grid cells, we are going calculate the correlation between proportions of agriculture (ag_p), pasture (pa_p), urban area (ua_p), non-forest (nf_p), water bodies (wt_p), active fire from Jun 2015 to 2016 (af_total), and burn scar from Jun 2015 to Aug 2016 (bs_total). Finally, we will calculate the correlation between active fire from Jun 2015 to 2016 (af_total) and environmental factors that may have contributed to the droughts, such as drought season length (ds), minimum cumulative water deficit (wd), precipitation (pr), temperature maximum (tx), temperature mean (tm), evapotranspiration mean (em), and evapotranspiration mean (et).
+
+# Loading libraries and setting the working directory
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# install.packages("geobr")
+# install.packages("remotes")
+# remotes::install_github("r-tmap/tmap")
+
+library(raster)    # Reading, writing, manipulating, analysing and modelling of spatial data
+library(sf)        # provides simple features access with a geometry list-column
+library(tidyverse) # collection of R packages for data science
+library(tmap)      # library for plotting maps
+library(geobr)     # library for Brazilian data sets
+
+# setting the working directory
+setwd("/data/GY3440/fernando/week5/")
+```
+
+# Visualize the Brazilian territory data using Geobr library
+
+```{r}
+
+view(geobr::list_geobr())
+```
+
+## Visualize the Brazilian states
+
+```{r}
+states <- geobr::read_state()
+
+map1 <- tm_shape(states)+
+  tm_polygons()
+  
+map1
+```
+
+```{r}
+map2 <- tm_shape(states)+
+  tm_polygons(fill = 'name_state')
+map2
+```
+
+## Visualization of the legal Amazon and the Amazon biome
+
+```{r}
+legal_amazon <- read_amazon()
+biome_amazon <- read_biomes() %>% filter(name_biome == "Amazônia")
+
+```
+
+```{r}
+map3 <- tm_shape(legal_amazon) + 
+  tm_polygons()+
+  tm_shape(biome_amazon) + 
+  tm_polygons()
+
+map3
+```
+
+```{r}
+tmap_mode("view")
+
+map4 <- tm_shape(states)+
+  tm_polygons(fill = 'name_state') +
+  tm_shape(legal_amazon) + 
+  tm_borders(col = 'green')+
+  tm_shape(biome_amazon) + 
+  tm_borders(col = 'red')
+  
+map4
+```
+
+## Visualization of the indigenous Land, conservation Units, and Urban Areas
+
+```{r}
+il <- geobr::read_indigenous_land()    %>% st_make_valid() %>% st_intersection(legal_amazon)
+pa <- geobr::read_conservation_units() %>% st_make_valid() %>% st_intersection(legal_amazon)
+urban <- geobr::read_urban_area()      %>% st_intersection(legal_amazon)
+
+
+map5 <- tm_shape(legal_amazon) + 
+  tm_borders(col = 'green')+
+  tm_shape(biome_amazon) + 
+  tm_borders(col = 'red') +
+  tm_shape(il) +
+  tm_polygons(fill = 'purple', alpha = 0.5) +
+  tm_shape(pa) +
+  tm_polygons(fill = 'darkgreen', alpha = 0.5) +
+  tm_shape(urban) +
+  tm_polygons(fill = 'grey', alpha = 0.5)
+map5 
+```
+
+```{r}
+tmap_mode("plot")
+
+map5 +
+  tm_graticules() +
+  tm_compass(position = c("left", "top"))
+```
+
+# Deforestation of the Amazon using PRODES data
+
+Let's open the data called prodes_amazonia_raster_2000_2022_v20231109.tif under the folder "data/prodes/prodes_amazonia_raster_2000_2022_v20231109.tif". 
+
+```{r}
+deforestation <- raster::raster("/data/GY3440/fernando/week5/data/prodes/prodes_amazonia_raster_2000_2022_v20231109.tif")
+```
+
+Because this is a TIF (an image) file, we need to add the colour templates to show the deforestation regions. The colours are the below, and the classes are from 2000 to 2020. So, 20 years of deforestation data of the Amazon!
+
+```{r}
+colours <- c("#faef1c",
+             "#dd3027",
+             "#e34832",
+             "#faf82f",
+             "#e34832",
+             "#e54e34",
+             "#e65437",
+             "#e85a3a",
+             "#e9603d",
+             "#eb663f",
+             "#ec6c42",
+             "#ee7145",
+             "#f07748",
+             "#f17d4a",
+             "#f3834d",
+             "#f48950",
+             "#f68f52",
+             "#f79555",
+             "#ffc700",
+             "#fffebd",
+             "#feffbf",
+             "#fafdbe",
+             "#f7fcbd",
+             "#f4fbbb",
+             "#f0f9ba",
+             "#edf8b9",
+             "#eaf7b8",
+             "#e6f5b7",
+             "#e3f4b6",
+             "#e0f3b5",
+             "#dcf1b4",
+             "#2649e6",
+             "#2e8113",
+             "#fc3ad2"
+              )
+brks <- c(-1 ,
+          0  ,
+          4  , 
+          6  ,
+          7  ,
+          8  ,
+          9  ,
+          10 ,
+          11 ,
+          12 ,
+          13 ,
+          14 ,
+          15 ,
+          16 ,
+          17 ,
+          18 ,
+          19 ,
+          20 ,
+          21 ,
+          22 ,
+          50 ,
+          51 ,
+          52 ,
+          53 ,
+          54 ,
+          55 ,
+          56 ,
+          57 ,
+          58 ,
+          59 ,
+          60 ,
+          61 ,
+          91 ,
+          100,
+          101)
+
+classes <- c("d2000",
+             "d2004",
+             "d2006",
+             "d2007",
+             "d2008",
+             "d2009",
+             "d2010",
+             "d2011",
+             "d2012",
+             "d2013",
+             "d2014",
+             "d2015",
+             "d2016",
+             "d2017",
+             "d2018",
+             "d2019",
+             "d2020",
+             "d2021",
+             "d2022",
+             "r2010",
+             "r2011",
+             "r2012",
+             "r2013",
+             "r2014",
+             "r2015",
+             "r2016",
+             "r2017",
+             "r2018",
+             "r2019",
+             "r2020",
+             "r2021",
+             "Hydrography",
+             "Forest",
+             "Non-Forest")
+```
+
+```{r}
+
+raster::plot(deforestation,
+             breaks = brks,
+             col = colours,
+             legend = F)
+legend("bottom", legend = classes, fill = colours, cex = 0.7, y.intersp = 0.7, ncol = 7, bg = NULL)
+```
+
+## [NOT WORKING] Using R API to access the Terrabrasilis deforestation data
+
+**terrabrasilisAnalyticsAPI** is an R client package for Terrabrasilis Analytics API.
+
+Installing and loading terrabrasilisAnalyticsAPI package in R
+
+```{r eval=FALSE, include=FALSE}
+devtools::install_github("terrabrasilis/terrabrasilisAnalyticsAPI") # github group name is terrabrasilis
+library(terrabrasilisAnalyticsAPI) # R package name is terrabrasilisAnalyticsAPI
+```
+
+Initialize Terrabrasilis Analytics API path variable
+
+```{r eval=FALSE, include=FALSE}
+apiPath <- "https://terrabrasilis.dpi.inpe.br/dashboard/api/v1/redis-cli/"
+```
+
+Define calls for application identifiers listing. From that information, making specific requests to other API end-points is possible.
+
+```{r eval=FALSE, include=FALSE}
+appIdentifier <- list_datasets(apiPath)
+
+appIdentifier
+```
+
+With that in mind, let us create a prodesAmazon variable.
+
+```{r eval=FALSE, include=FALSE}
+prodesAmazon <- appIdentifier[2]
+
+
+prodesAmazon
+```
+
+The first question to ask the API is: Which periods do prodes Amazon contain?
+
+```{r eval=FALSE, include=FALSE}
+periods <- list_periods(apiPath, prodesAmazon)
+
+periods
+```
+
+Users can also ask the API which classes PRODES Amazon contains.
+
+```{r eval=FALSE, include=FALSE}
+classes <- list_classes(apiPath, prodesAmazon)
+
+classes
+```
+
+In this case, it is just one class designating the deforestation label. Other thematic mapping projects, however, would contain more than one class or even the same class name.
+
+Users might ask which local of interests (lois), as states, municipalities, conservation units, and indigenous areas, the API provides.
+
+```{r eval=FALSE, include=FALSE}
+locals <- list_locals(apiPath, prodesAmazon)
+
+locals
+```
+
+Nevertheless, locals are not considered the final granularity since each state, municipality, conservation unit, and indigenous area also contains small-scale local interests.
+
+```{r eval=FALSE, include=FALSE}
+localOfInterest <- list_local_of_interests(apiPath, prodesAmazon)
+
+localOfInterest[402:412,]
+```
+
+Users are able to filter loinames by one specific lois such as UF.
+
+```{r eval=FALSE, include=FALSE}
+loiUF = dplyr::filter(locals, grepl("uf", name))$gid
+
+loinamesByLoi <- list_localOfInterestByLocal(apiPath, prodesAmazon, loiUF)
+
+loinamesByLoi
+```
+
+In order to fit data into governmental needs, we also considered filters for each data recognized as type in the data API call.
+
+```{r eval=FALSE, include=FALSE}
+filters <- list_filters(apiPath, prodesAmazon)
+
+filters
+```
+
+All this data is used to gather specific thematic map area values produced by government agencies such as the National Institute for Space Research. In this example, users can acquire data by loiname; that is, the function accepts the class name and loiname gid as parameters.
+
+```{r eval=FALSE, include=FALSE}
+data <- get_dataByLocalOfInterest(apiPath, 
+                                  prodesAmazon, 
+                                  classes$name, 
+                                  loinamesByLoi[5,]$gid)
+
+data
+```
+
+The same query can be performed using the get data by parameters function. In this case, users also pass a start and end date as parameters. UnlikeDifferent from the previous call, users will receive only some of the available timelines as soon as they desire.
+
+```{r eval=FALSE, include=FALSE}
+data <- get_dataByParameters(apiPath, 
+                            prodesAmazon, 
+                            classes$name, 
+                            loinamesByLoi[5,]$gid, 
+                            "1500-01-01", 
+                            "2023-01-01")
+
+data
+```
+
+In this example, users are able to acquire data by loiname (PARÁ) and dates, we also considered filters in the data. Compare with PARÁ [h](http://www.terrabrasilis.dpi.inpe.br/app/dashboard/deforestation/biomes/cerrado/increments){.uri}<http://www.terrabrasilis.dpi.inpe.br/app/dashboard/deforestation/biomes/amazon/increments>
+
+```{r eval=FALSE, include=FALSE}
+data <- get_dataByParameters(apiPath, prodesAmazon, classes$name, loinamesByLoi[5,]$gid, "1987-01-01", "2023-12-31") %>%
+  dplyr::filter(.,endDate.year!=2000) %>% 
+  dplyr::select(name, clazz, startDate.year, endDate.year, area)
+
+data
+```
+
+Let's see the area of deforestation from 2008 to 2013 for Para state
+
+```{r eval=FALSE, include=FALSE}
+library(ggplot2) 
+
+ggplot(data, aes(x=as.factor(endDate.year), y=area, fill=clazz)) + 
+  geom_text(aes(label=as.numeric(round(data$area, 1))), vjust=-0.5, hjust=0.3, size = 3) +
+  geom_bar(stat = "identity", width = 0.7, fill = "#008080") +
+  scale_x_discrete("Year", labels = as.character(data$endDate.year), breaks = data$endDate.year) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  labs(colour = "Date") + 
+  labs(x = "Years") + 
+  labs(y = "Areas (km²)") + 
+  labs(title = loinamesByLoi[5,]$loiname) + labs(fill = "class")
+```
+
+# Local case study - the Area of Tapajos National Forest
+
+## Cropping the raster data from Prodes
+
+Here we are cropping (cutting) the area using geographical coordenates.
+
+```{r}
+e <- raster::extent(-56.5956  , -53.58015 , -5.028585 , -1.727968)
+tapajos <- deforestation %>% crop(e) 
+
+raster::plot(tapajos, breaks = brks, col = colours, legend = F) 
+```
+
+Here we are cropping the area using a shape file data
+
+```{r}
+bb <- st_read("/data/GY3440/fernando/week5/data/Area_corte_Mateus.shp") %>% 
+  st_transform(st_crs(deforestation)) # Transforming vector's projection to match raster's projection
+
+tapajos <- deforestation %>% crop(bb) 
+
+raster::plot(tapajos, breaks = brks, col = colours, legend = F) 
+```
+
+Both approaches produced the same results.
+
+## Visualization of the MapBiomas land-use data
+
+Loading and plotting the the data from MapBiomas for the year of 2015
+
+Note that the MapBiomas data is more rich. It has more land-use classes such as pasture, and other types of forest. The previou map from Prodes data has only deforestation data - no additional land-use classes. 
+
+```{r}
+url <-"/vsicurl/https://storage.googleapis.com/mapbiomas-public/initiatives/brasil/collection_8/lclu/coverage/brasil_coverage_2015.tif"
+landuse <- raster(url) %>%
+  crop(bb)
+
+codes <- readr::read_delim("/data/GY3440/fernando/week5/data/Codigos-da-legenda-colecao-8.csv", 
+    delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+
+legend_vars <- codes %>% filter(Class_ID %in% unique(landuse)) %>% arrange(Class_ID)
+
+tm_shape(landuse)+
+  tm_raster(col.scale = tm_scale_categorical(labels = legend_vars$Description, 
+                                             values = legend_vars$Color),
+            col.legend = tm_legend(title = "Land-use for 2015")
+            )+
+  tm_layout(legend.outside = TRUE)
+```
+
+## Visualization of the burn scar areas
+
+Methods:  For our burned area estimation, we used 48 Landsat images (Table S2) from Landsat 5, 7, and 8 between the years 2010 and 2016. These images covered an area of 6.48 million ha and included 14 municipalities in central-eastern Amazonia: Aveiro, Barreirinha, Belterra, Itaituba, Juruti, Mojuí dos Campos, Monte Alegre, Nhamundá, Parintins, Placas, Prainha, Rurópolis, Santarém, and Uruará. We performed pixel-by-pixel unsupervised k-means classifications (MacQUEEN, 1967, Drake and Jonathan, 2012) of each Landsat image with six classes and 10 interactions in ERDAS IMAGE v.16 (2016), to classify primary forest (including both undisturbed and disturbed), secondary forest, burn scars (from the 2015- 16 El Niño-mediated fires), deforested areas, bodies of water, and non-forest (figure 1). We used the following as input variables: spectral bands including the visible to the medium infrared, Normalised Difference Vegetation Index (NDVI), Soil Adjusted Vegetation Index (SAVI), Enhanced Vegetation Index (EVI), and the Normalised Burn Ratio 2 (NBR2). Imagery from Landsat 7 and 8 were used in combination with the panchromatic band (Landsat 7 & 8) to improve their spatial resolution. The classified rasters were then imported and vectorised in ArcGIS v.10.2 (ESRI 2014), where a visual inspection of the automatic classification was made to correct any classification errors. Each individual band and all possible combinations in RGB composites were used to identify classifier errors. Following the correction of these errors, we calculated the cumulative area of primary and secondary forest that experienced understorey wildfires during 2015-16 in the Santarém region (figure 1).
+
+```{r}
+
+bs <- raster("/data/GY3440/fernando/week5/data/Inc_2015_2016_allweeks_500m.tif")
+
+tapajos2 <- projectRaster(from = tapajos, crs = crs(bs), res = 500, method = 'ngb')
+
+raster::plot(tapajos2, breaks = brks, col = colours, legend = F) 
+plot(bs, add = T, col= "red", legend = F)
+
+
+tm_shape(landuse)+
+  tm_raster(col.scale= tm_scale_categorical(labels = legend_vars$Description, values = legend_vars$Color),
+            col.legend = tm_legend(title = "Land-use for 2015")
+            )+
+  tm_shape(bs)+
+  tm_raster(col.scale = tm_scale_continuous(values = "red"),
+            col.legend = tm_legend(title = "Week burned"))+
+  tm_layout(legend.outside = TRUE)
+```
+
+## Visualization of the secondary forest areas
+
+Loading secondary forest
+
+```{r}
+
+sv <- raster( "/vsicurl/https://storage.googleapis.com/mapbiomas-public/initiatives/brasil/collection_8/secveg-age/sec_veg_age_2016.tif") %>% crop (bb)
+
+tm_shape(sv)+
+  tm_raster(col.scale= tm_scale_continuous(values = "green",limits = c(1,36)),
+            col.legend = tm_legend(title = "Age of secundary forest (2016)")
+            )+
+  tm_layout(legend.outside = TRUE)
+
+```
+
+## Vizualizaton of the precipitation maps
+
+Precipitation data is assemble as the total for each quarter (trimester) for 2015 and 2016, acroding to the table bellow:
+
+| **Codename** | **corresponding months**     |
+|--------------|------------------------------|
+| DJF          | December, January, February  |
+| MAM          | March, April, May            |
+| JJA          | June, July, August           |
+| SON          | September, October, November |
+
+```{r}
+# loading rivers as auxiliary data
+
+rivers <- st_read("/data/GY3440/fernando/week5/data/Rivers.shp") %>% st_make_valid()
+
+# List of Monthly Rainfall Rasters
+
+monthly = list.files("/data/GY3440/fernando/week5/data/PRECIP_SUM_TRIMESTRAL/", pattern = '.tif$', full.names = T)
+
+# opening all the listed files as stacked raster
+
+precip = stack(monthly) # stacking
+
+tm_shape(precip) +
+  tm_raster(col.scale = tm_scale_continuous(limits = c(min(getValues(precip))-1, 
+                                                       max(getValues(precip))+1),
+                                            n  = 7),
+            col.free   = F,
+            col.legend = tm_legend(title = "Preciptation by trimester (mm)")
+            ) +
+  tm_shape(rivers)+
+  tm_fill(fill = "darkblue")+
+  tm_layout(legend.outside = TRUE)
+
+
+```
+
+## Vizualization of the roads of the region
+
+```{r}
+
+roads <- st_read("/data/GY3440/fernando/week5/data/Roads_interp_wgs84z21_v2.shp")
+
+raster::plot(tapajos2, breaks = brks, col = colours, legend = F, main = "PRODES Deforestation") 
+plot(roads$geometry, add = T)
+
+tm_shape(landuse)+
+  tm_raster(col.scale= tm_scale_categorical(labels = legend_vars$Description, values = legend_vars$Color),
+            col.legend = tm_legend(title = "Land-use for 2015")
+            )+
+  tm_shape(roads)+
+  tm_lines("black")+
+  tm_layout(legend.outside = TRUE)
+
+
+```
+
+## Landscape analysis by cellular space
+
+Using cellular space is a method for assessing the landscape. Each cell works as a sample of the landscape where de variables are represented. In the loaded dataset as `cells`, the cells are the rows and the variables are the columns.
+
+The varibles are described as the following table:
+
+| **variable suffix** | **Description**                                 | **Category**  |
+|:------------------|:-----------------------------------|:------------------|
+| `af_`               | Active Fire (n°/trimester)                      | Environmental |
+| `ds_`               | Drought Season Length (days/trimester)          | Environmental |
+| `wd_`               | Minimum Cumulative Water Deficit (mm/trimester) | Environmental |
+| `pr_`               | Precipitation (mm/trimester)                    | Environmental |
+| `tx_`               | Temperature Max. (C°)                           | Environmental |
+| `tm_`               | temperature Mean (C°)                           | Environmental |
+| `em_`               | evapotranspiration mean (mm)                    | Environmental |
+| `et_`               | evapotranspiration total (mm)                   | Environmental |
+| `ag_p`              | TerraClass 2014 agriculture proportion          | Anthropic     |
+| `pa_p`              | TerraClass 2014 pasture proportion              | Anthropic     |
+| `ua_p`              | TerraClass 2014 Urban Area proportion           | Anthropic     |
+| `pf_p`              | TerraClass 2014 Primary forest proportion       | Anthropic     |
+| `sf_p`              | TerraClass 2014 secondary forest proportion     | Anthropic     |
+| `nf_p`              | TerraClass 2014 non forest proportion           | Anthropic     |
+| `wt_p`              | TerraClass 2014 water bodies proportion         | Anthropic     |
+| `pf_edg_l`          | TerraClass 2014 primary forest edge length      | Anthropic     |
+| `sf_edg_l`          | TerraClass 2014 secondary forest edge length    | Anthropic     |
+| `road_lengt`        | road length                                     | Anthropic     |
+| `CNEFE_n`           | CNEFE communities number in the cell            | Anthropic     |
+| `dt_c`              | numbers of DETER forest disturbance warnings    | Anthropic     |
+| `dt_p`              | proportion of DETER forest disturbance warnings | Anthropic     |
+| `cr_area_m`         | mean of CAR private land areas                  | Anthropic     |
+| `cr_c`              | number of CAR private land areas                | Anthropic     |
+| `cr_p`              | proportion of CAR private land areas            | Anthropic     |
+| `con_p`             | proportion of CAR consolidated areas            | Anthropic     |
+| `af_total`          | Active Fire from jun 2015 to aug 2016           | Disturbance   |
+| `bs_total`          | Burn Scar from jun 2015 to aug 2016             | Disturbance   |
+
+The seasonality of the variables are represented in the codename as the following table:
+
+| **Codename** | **corresponding Season**              |
+|--------------|---------------------------------------|
+| `_djf15_`    | December, January, February 2014-2015 |
+| `_mam15_`    | March, April, May 2015                |
+| `_jja15_`    | June, July, August 2015               |
+| `_son15_`    | September, October, November 2015     |
+| `_djf16_`    | December, January, February 2015-2016 |
+| `_mam16_`    | March, April, May 2016                |
+| `_jja16_`    | June, July, August 2016               |
+| `_son16_`    | September, October, November 2016     |
+
+```{r}
+cells <- st_read("/data/GY3440/fernando/week5/data/cel_10km_v8_ActiveFire.shp")
+view(cells)
+```
+
+### BURN SCAR
+
+```{r}
+tm_shape(cells) +
+  tm_fill(fill = "bs_total",
+          fill.scale = tm_scale_continuous(values = "red"),
+          fill.legend = tm_legend(title = "Prop. Burn Scar 2015-2015")) +
+  tm_shape(rivers)+
+  tm_fill(fill = "darkblue",
+          fill.legend = tm_legend(title = "Rivers")) +
+  tm_shape(roads)+
+  tm_lines(col.legend = tm_legend(title = "Roads"))+
+  tm_graticules(lines = F) +
+  tm_compass(position = tm_pos_out())
+
+
+```
+
+### ACTIVE FIRE
+
+```{r}
+tm_shape(cells) +
+  tm_fill(fill = "af_total",
+          fill.scale = tm_scale_continuous(values = "red"),
+          fill.legend = tm_legend(title = "active fire 2015-2015")) +
+  tm_shape(rivers)+
+  tm_fill(fill = "darkblue",
+          fill.legend = tm_legend(title = "Rivers")) +
+  tm_shape(roads)+
+  tm_lines(col.legend = tm_legend(title = "Roads"))+
+  tm_graticules(lines = F) +
+  tm_compass(position = tm_pos_out())
+
+
+```
+
+### ACTIVE FIRE PER SEASON
+
+```{r}
+af <- cells %>% select(contains(c("af_djf15_",
+                                "af_mam15_",
+                                "af_jja15_",
+                                "af_son15_",
+                                "af_djf16_",
+                                "af_mam16_",
+                                "af_jja16_",
+                                "af_son16_"
+                                ))) # selecting only the columns of active fire
+
+plot(af, breaks = "fisher",
+     lwd = 0.5,
+     key.pos = 4,
+     pal = hcl.colors(10, "reds"),
+     max.plot = 23)
+```
+
+### CUMULATIVE WATER DEFICIT
+
+```{r}
+wd <- cells %>% select(contains("wd_")) # selecting only the columns of water deficit.
+
+plot(wd, breaks = "fisher",
+     lwd = 0.5,
+     key.pos = 4, 
+     pal = hcl.colors(10, "reds"))
+```
+
+### Relationships
+
+Correlation between anthropic factors, active fire (`af_total`), and burn scars (`bs_total`).
+
+```{r echo=TRUE}
+
+cellland <- cells %>% select(contains(c("ag_p", "pa_p","ua_p","nf_p","wt_p", "af_total", "bs_total"))) %>% st_drop_geometry()
+cellland[is.na(cellland)] = 0
+psych::pairs.panels(cellland, ellipses=F, scale=F, stars=T, gap =0.2, lm=T, cex.cor=1.2, rug=F, hist.col="skyblue3")
+```
+
+```{r echo=TRUE}
+celleco <- cells %>% select(contains(c("pf_edg_l", "sf_edg_l", "pf_p", "sf_p","af_total","bs_total"))) %>% st_drop_geometry()
+celleco[is.na(celleco)] = 0
+
+psych::pairs.panels(celleco[,], ellipses=F, scale=F, stars=T, gap =0.2, lm=F, cex.cor=1.2, rug=F, hist.col="skyblue3",)
+```
+
+Correlation between active fire (`af_djf15_c`) and environmental factors for December 2014, January 2015, and February 2015 season (`bs_total`).
+
+```{r echo=TRUE}
+celldjf15 <- cells %>% select(contains('djf15')) %>% st_drop_geometry()
+celldjf15[is.na(celldjf15)] = 0
+psych::pairs.panels(celldjf15, ellipses=F, scale=F, stars=T, gap =0.2, lm=T, cex.cor=1.2, rug=F, hist.col="skyblue3")
+```
